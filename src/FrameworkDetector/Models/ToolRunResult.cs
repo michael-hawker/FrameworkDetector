@@ -28,6 +28,7 @@ public record ToolRunResult
 
     public string Timestamp { get; }
 
+    [JsonConverter(typeof(InputTypeJsonConverter))]
     public IReadOnlyDictionary<string, IReadOnlyList<object?>> Inputs => _inputs;
     private readonly Dictionary<string, IReadOnlyList<object?>> _inputs = new Dictionary<string, IReadOnlyList<object?>>();
 

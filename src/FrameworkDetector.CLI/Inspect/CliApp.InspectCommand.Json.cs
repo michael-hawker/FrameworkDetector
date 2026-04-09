@@ -25,6 +25,12 @@ public partial class CliApp
     /// <returns><see cref="Command"/></returns>
     private Command GetInspectJsonSubCommand()
     {
+        Option<bool> redetectOption = new("--redetect", "-r")
+        {
+            Description = "Use the input data only from the JSON results file and re-run through the detection engine before displaying/outputting results.",
+            Arity = ArgumentArity.Zero, // Note: Flag only, no value
+        };
+
         Argument<string?> pathToJsonArgument = new("path")
         {
             Description = "The full path to the json file on disk to inspect.",
@@ -34,6 +40,8 @@ public partial class CliApp
         Command jsonCommand = new("json", "Display a prior results JSON file's results from disk (will not re-output unless redetecting).")
         {
             pathToJsonArgument,
+            redetectOption,
+            OutputFileOption,
             PluginFilesOption,
         };
 
@@ -50,7 +58,20 @@ public partial class CliApp
                 return (int)ExitCode.ArgumentParsingError;
             }
 
+            var redetect = parseResult.GetValue(redetectOption);
             var pathToJson = parseResult.GetValue(pathToJsonArgument);
+
+            // This is only relevant really if we redetect the inputs, as otherwise would expect to just re-output the same input data/results...
+            if (!TryParseOutputFile(parseResult) && redetect)
+            {
+                PrintError("Invalid output file specified");
+                return (int)ExitCode.ArgumentParsingError;
+            }
+
+            if ((OutputFile is not null || parseResult.GetValue(OutputFileOption) is not null) && !redetect)
+            {
+                PrintWarning("Output File is unused if not redetecting results.");
+            }
 
             if (!TryInitializeFrameworkDetectorServices(parseResult))
             {
@@ -67,7 +88,7 @@ public partial class CliApp
                     return (int)ExitCode.ArgumentParsingError;
                 }
 
-                if (!await InspectJsonAsync(fileInfo, cancellationToken))
+                if (!await InspectJsonAsync(fileInfo, redetect, OutputFile, cancellationToken))
                 {
                     return (int)ExitCode.InspectFailed;
                 }
@@ -82,7 +103,7 @@ public partial class CliApp
     }
 
     /// Encapsulation of initializing datasource and grabbing engine reference to kick-off a detection against all registered detectors (see ConfigureServices)
-    private async Task<bool> InspectJsonAsync(FileInfo fileInfo, CancellationToken cancellationToken)
+    private async Task<bool> InspectJsonAsync(FileInfo fileInfo, bool redetect, string? outputFilename, CancellationToken cancellationToken)
     {
         // TODO: Probably have this elsewhere to be called
         var target = $"json {fileInfo.FullName}";
@@ -129,9 +150,22 @@ public partial class CliApp
                 table.Write(Format.MarkDown);
             }
 
-            PrintResult(toolRunResult);
+            // Are we re-running the detection? (i.e. against original re-serialized input data)
+            if (redetect)
+            {
+                PrintInfo("Reinspecting {0}:", target);
 
-            return true;
+                var inputs = toolRunResult.Inputs.Values.SelectMany(v => v).OfType<IInputType>().ToList();
+
+                return await RunInspectionAsync(target, inputs, outputFilename, cancellationToken);
+            }
+            // Or just re-outputting the stored results (easy)
+            else
+            {
+                PrintResult(toolRunResult);
+
+                return true;
+            }
         }
         catch (OperationCanceledException)
         {
